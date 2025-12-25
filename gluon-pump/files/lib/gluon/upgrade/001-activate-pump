@@ -1,6 +1,0 @@
-#!/bin/sh
-
-#if [ -e /lib/gluon/config-mode/model/admin/wifi-config-pump.lua ]; then
-#  test -e /lib/gluon/config-mode/model/admin/wifi-config.lua && /bin/rm /lib/gluon/config-mode/model/admin/wifi-config.lua
-#  test -e /lib/gluon/config-mode/controller/admin/wifi-config.lua && /bin/rm /lib/gluon/config-mode/controller/admin/wifi-config.lua
-#fi
