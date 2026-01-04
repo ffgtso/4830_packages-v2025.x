@@ -9,7 +9,7 @@
 if [ -e /tmp/is_online ]; then /bin/rm /tmp/is_online ; fi
 USEIPV4=1
 USEIPV6=0
-gluon-wan /bin/ping -q -c 3 setup.ipv4.4830.org >/dev/null 2>&1
+gluon-wan-dns /bin/ping -q -c 3 setup.ipv4.4830.org >/dev/null 2>&1
 if [ $? -ne 0 ]; then
  USEIPV4=0
  /bin/ping -q -c 3 setup.ipv6.4830.org >/dev/null 2>&1
