@@ -44,6 +44,21 @@ if [ -e /lib/gluon/config-mode/reboot-ffgt ]; then
   mv /lib/gluon/config-mode/reboot-ffgt /lib/gluon/config-mode/reboot ||:
 fi
 
+# Drop ssid-changer options, we want this active all the time
+for i in controller model
+do
+  if [ -e /lib/gluon/config-mode/${i}/admin/ssid-changer.lua ]; then
+    rm /lib/gluon/config-mode/${i}/admin/ssid-changer.lua ||:
+  fi
+done
+
+# Always enable ssid-changer
+ssid_changer_active="$(uci get ssid-changer.settings.enabled 2>/dev/null)"
+if [ "${ssid_changer_active}" != "1" ]; then
+  uci set ssid-changer.settings.enabled='1' ||:
+  uci commit ssid-changer ||:
+fi
+
 BOARD="$(cat /tmp/sysinfo/board_name)"
 if [ "${BOARD}" = "dlink,dap-x1860-a1" ]; then
   RSSID_DEV="$(uci get system.rssid_wlan1.dev 2>&1)"
