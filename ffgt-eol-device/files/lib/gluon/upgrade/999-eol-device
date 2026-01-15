@@ -34,4 +34,3 @@ else
     uci commit system
   fi
 fi
-fi
