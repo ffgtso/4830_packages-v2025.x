@@ -35,7 +35,7 @@ if [ $RC -eq 0 ]; then
 fi
 
 if [ -e /lib/gluon/hostname-remapping.txt ]; then
-  for i in $(cat /lib/gluon/hostname-remapping.txt)
+  for i in $(cat /lib/gluon/hostname-remapping.txt | sed -e s/\"//g)
   do
     left=$(echo $i|cut -d ';' -f 1)
     right=$(echo $i|cut -d ';' -f 2)
