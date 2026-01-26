@@ -23,6 +23,9 @@ if [ ${uptime} -lt 900 ]; then
   exit 0
 fi
 
+branch=$(uci get autoupdater.settings.branch)
+AUBRNCH="${branch}"
+
 # Empty string == unset in UCI
 switchtime="$(/sbin/uci get gluon-node-info.@location[0].switchtime 2>/dev/null)"
 # Ensure these values are numbers
@@ -44,6 +47,10 @@ if [ $(printf "%.0f" "${curlat}") != 0 -o $(printf "%.0f" "${curlon}") != 0 ]; t
  if [ -e /tmp/getmesh.out ]; then
   DSTMESH="$(awk </tmp/getmesh.out '/^DST:/ {printf("%s", $2);}')"
   STRTIME="$(awk </tmp/getmesh.out '/^FRM:/ {printf("%s", $2);}')"
+  AUBRNCH="$(awk </tmp/getmesh.out '/^AUB:/ {printf("%s", $2);}')"
+  if [ "X${AUBRNCH}" = "X" ]; then
+   AUBRNCH="${branch}"
+  fi
 
   # If no STaRTTIME returned, delete a stored switchtime in UCI; otherwise,
   # if stored switchtime differs from STaRTTIME, set this as new switchtime.
@@ -72,6 +79,12 @@ if [ $(printf "%.0f" "${curlat}") != 0 -o $(printf "%.0f" "${curlon}") != 0 ]; t
  else
   logger "$0: call for get=mesh failed on setup.${IPVXPREFIX}4830.org ..."
  fi
+fi
+
+# Change Autoupdater branch if setup server says so
+if [ "${AUBRNCH}" != "${branch}" ]; then
+  uci set autoupdater.settings.branch="${AUBRNCH}"
+  uci commit autoupdater
 fi
 
 # Now, as we've processed the returned data (or not), check if there's a
