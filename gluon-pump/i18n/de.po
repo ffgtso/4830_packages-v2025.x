@@ -1,0 +1,64 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: gluon-pump\n"
+"PO-Revision-Date: 2026-06-24 00:00+0200\n"
+"Language-Team: German\n"
+"Language: de\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=2; plural=(n != 1);\n"
+
+msgid "PUMP"
+msgstr "PUMP"
+
+msgid "PUMP (Premium Ultra Mesh Plus) creates an encrypted infrastructure WLAN and uses it as a batman-adv transport. Use AP mode on the central side of a planned link and STA mode on the remote side. The SSID and passphrase are derived from the site/domain configuration and cannot be changed here."
+msgstr "PUMP (Premium Ultra Mesh Plus) erzeugt ein verschlüsseltes Infrastruktur-WLAN und nutzt es als batman-adv-Transport. Verwende den AP-Modus auf der zentralen Seite einer geplanten Strecke und den STA-Modus auf der Gegenstelle. SSID und Passphrase werden aus der Site-/Domain-Konfiguration abgeleitet und können hier nicht geändert werden."
+
+msgid "Name (SSID)"
+msgstr "Name (SSID)"
+
+msgid "Passphrase"
+msgstr "Passphrase"
+
+msgid "The generated PUMP SSID is longer than 32 characters. Shorten the domain code in gluon.core.domain."
+msgstr "Die erzeugte PUMP-SSID ist länger als 32 Zeichen. Kürze den Domain-Code in gluon.core.domain."
+
+msgid "The generated PUMP passphrase is not a valid WPA key. prefix6 must be 8-63 printable ASCII characters."
+msgstr "Die erzeugte PUMP-Passphrase ist kein gültiger WPA-Schlüssel. prefix6 muss aus 8 bis 63 druckbaren ASCII-Zeichen bestehen."
+
+msgid "Enabled"
+msgstr "Aktiviert"
+
+msgid "Mode"
+msgstr "Modus"
+
+msgid "Access point (AP)"
+msgstr "Access Point (AP)"
+
+msgid "Station (STA)"
+msgstr "Station (STA)"
+
+msgid "Radio"
+msgstr "Radio"
+
+msgid "All radios"
+msgstr "Alle Radios"
+
+msgid "unknown band"
+msgstr "unbekanntes Band"
+
+msgid "Configuration warning"
+msgstr "Konfigurationswarnung"
+
+msgid "Channel"
+msgstr "Kanal"
+
+msgid "HT mode"
+msgstr "HT-Modus"
+
+msgid "(automatic)"
+msgstr "(automatisch)"
+
+msgid "(automatic / best available)"
+msgstr "(automatisch / bester verfügbarer Modus)"
