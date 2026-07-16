@@ -67,22 +67,65 @@ function M.uplink_ifname()
 	return 'pumpwan'
 end
 
+function M.uplink_gluon_iface_section()
+	return 'iface_' .. M.uplink_ifname():gsub('[^%w_]', '_')
+end
+
+function M.uplink_network_name()
+	return 'pump_wan'
+end
+
+function M.uplink_network6_name()
+	return 'pump_wan6'
+end
+
 function M.radio_selected(selected, radio_name)
 	selected = non_empty(selected) or 'all'
 	return selected == 'all' or selected == radio_name
 end
 
-function M.encryption_uses_key(encryption)
+function M.normalize_encryption(encryption)
 	encryption = non_empty(encryption) or 'psk2'
+	if encryption == 'auto' then
+		return 'psk2'
+	end
+	if encryption == 'psk3-mixed' then
+		return 'sae-mixed'
+	end
+	return encryption
+end
+
+function M.encryption_uses_key(encryption)
+	encryption = M.normalize_encryption(encryption)
 	return encryption ~= 'none'
+end
+
+function M.uplink_bssid_is_valid(bssid)
+	bssid = non_empty(bssid)
+	return bssid ~= nil and bssid:match('^%x%x:%x%x:%x%x:%x%x:%x%x:%x%x$') ~= nil
+end
+
+function M.uplink_bssid_locked()
+	local locked = uci:get('pump', 'settings', 'uplink_bssid_lock')
+	if locked == nil then
+		-- Existing fix5 configurations always pinned the selected BSSID. Preserve
+		-- that behaviour until the user explicitly changes the new option.
+		return non_empty(uci:get('pump', 'settings', 'uplink_bssid')) ~= nil
+	end
+
+	return uci:get_bool('pump', 'settings', 'uplink_bssid_lock')
 end
 
 function M.uplink_config_is_valid()
 	local ssid = non_empty(uci:get('pump', 'settings', 'uplink_ssid'))
 	local radio = non_empty(uci:get('pump', 'settings', 'uplink_radio'))
-	local encryption = non_empty(uci:get('pump', 'settings', 'uplink_encryption')) or 'psk2'
+	local encryption = M.normalize_encryption(uci:get('pump', 'settings', 'uplink_encryption'))
 
 	if not ssid or not radio then
+		return false
+	end
+
+	if M.uplink_bssid_locked() and not M.uplink_bssid_is_valid(uci:get('pump', 'settings', 'uplink_bssid')) then
 		return false
 	end
 

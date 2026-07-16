@@ -3,6 +3,15 @@ local uci = require('simple-uci').cursor()
 local wireless = require 'gluon.wireless'
 local pump = require 'gluon.pump'
 
+
+local function commit_upgrade_state()
+	-- 335-gluon-pump runs in a separate process and writes its changes through
+	-- UCI. Commit those freshly materialized changes with the CLI instead of
+	-- committing this config-mode cursor again; the cursor may still contain
+	-- pre-upgrade values such as tunneldigger.*.bind_interface='br-wan'.
+	os.execute('uci -q commit pump >/dev/null 2>&1; uci -q commit gluon >/dev/null 2>&1; uci -q commit network >/dev/null 2>&1; uci -q commit wireless >/dev/null 2>&1; uci -q commit firewall >/dev/null 2>&1; uci -q commit tunneldigger >/dev/null 2>&1')
+end
+
 local f = Form(translate('PUMP'))
 
 local s = f:section(Section, nil, translate(
@@ -305,7 +314,7 @@ local function encryption_to_uci(entry)
 	end
 
 	if auth:match('SAE') and auth:match('PSK') then
-		return 'psk3-mixed'
+		return 'sae-mixed'
 	elseif auth:match('SAE') then
 		return 'sae'
 	elseif tonumber(enc.wpa) and tonumber(enc.wpa) >= 2 then
@@ -385,10 +394,29 @@ uplink_network:depends(uplink_enabled, true)
 local stored_uplink_radio = pump.non_empty(uci:get('pump', 'settings', 'uplink_radio'))
 local stored_uplink_ssid = pump.non_empty(uci:get('pump', 'settings', 'uplink_ssid'))
 local stored_uplink_bssid = pump.non_empty(uci:get('pump', 'settings', 'uplink_bssid'))
-local stored_uplink_encryption = pump.non_empty(uci:get('pump', 'settings', 'uplink_encryption')) or 'psk2'
-local stored_uplink_value = stored_uplink_radio and stored_uplink_bssid and (stored_uplink_radio .. '|' .. stored_uplink_bssid) or nil
+local stored_uplink_bssid_lock = pump.uplink_bssid_locked()
+local stored_uplink_encryption = pump.normalize_encryption(uci:get('pump', 'settings', 'uplink_encryption'))
 
-if stored_uplink_value and not scan_entries[stored_uplink_value] and stored_uplink_ssid then
+local function current_uplink_value()
+	if stored_uplink_radio and stored_uplink_bssid then
+		return stored_uplink_radio .. '|' .. stored_uplink_bssid
+	end
+
+	if stored_uplink_radio and stored_uplink_ssid then
+		for _, value in ipairs(scan_order) do
+			local entry = scan_entries[value]
+			if entry.radio == stored_uplink_radio and entry.ssid == stored_uplink_ssid then
+				return value
+			end
+		end
+	end
+
+	return nil
+end
+
+local stored_uplink_value = current_uplink_value()
+
+if stored_uplink_value and not scan_entries[stored_uplink_value] and stored_uplink_ssid and stored_uplink_bssid then
 	uplink_network:value(stored_uplink_value, string.format('%s: %s (%s, %s)', stored_uplink_radio, stored_uplink_ssid, stored_uplink_bssid, translate('configured; currently not seen')))
 	scan_entries[stored_uplink_value] = {
 		radio = stored_uplink_radio,
@@ -410,17 +438,56 @@ end
 
 uplink_network.default = stored_uplink_value or ''
 
+local uplink_bssid = us:option(Value, 'uplink_bssid', translate('BSSID'))
+uplink_bssid:depends(uplink_enabled, true)
+uplink_bssid.default = stored_uplink_bssid or ''
+uplink_bssid.optional = true
+function uplink_bssid:cfgvalue()
+	if stored_uplink_bssid then
+		return stored_uplink_bssid
+	end
+
+	local selected = scan_entries[uplink_network.data or stored_uplink_value or '']
+	return selected and selected.bssid or ''
+end
+uplink_bssid.description = translate('Pre-filled with the BSSID of the selected upstream network. You may change it manually.')
+
+local uplink_bssid_lock = us:option(Flag, 'uplink_bssid_lock', translate('Use only this BSSID'))
+uplink_bssid_lock:depends(uplink_enabled, true)
+uplink_bssid_lock.default = stored_uplink_bssid_lock
+uplink_bssid_lock.description = translate('When disabled, the uplink may associate with any AP that advertises the selected SSID.')
+
 local uplink_key = us:option(Value, 'uplink_key', translate('Uplink passphrase'))
 uplink_key:depends(uplink_enabled, true)
 uplink_key.default = uci:get('pump', 'settings', 'uplink_key') or ''
+uplink_key.optional = true
 uplink_key.password = true
 uplink_key.description = translate('Required for encrypted upstream networks; ignored for open networks.')
+
+local uplink_htmode = us:option(ListValue, 'uplink_htmode', translate('HT mode'))
+uplink_htmode:depends(uplink_enabled, true)
+uplink_htmode:value('auto', translate('(automatic / best available)'))
+for _, htmode in ipairs({
+	'HE160', 'HE80', 'HE40', 'HE20',
+	'VHT160', 'VHT80', 'VHT40', 'VHT20',
+	'HT40', 'HT20',
+}) do
+	uplink_htmode:value(htmode, htmode)
+end
+uplink_htmode.default = uci:get('pump', 'settings', 'uplink_htmode') or 'auto'
+uplink_htmode.description = translate('Use automatic mode for maximum throughput; select a fixed width such as VHT80, HE80 or HT20 if the upstream AP is unstable.')
+
+local uplink_powersave = us:option(Flag, 'uplink_powersave', translate('Enable WiFi power saving'))
+uplink_powersave:depends(uplink_enabled, true)
+uplink_powersave.default = uci:get_bool('pump', 'settings', 'uplink_powersave')
+uplink_powersave.description = translate('Disabled by default for uplink stability. Enable only when power consumption is more important than latency and link robustness.')
 
 local uplink_info = us:option(Value, '_uplink_info', translate('Current uplink'))
 uplink_info.readonly = true
 function uplink_info:cfgvalue()
 	if stored_uplink_radio and stored_uplink_ssid then
-		return string.format('%s / %s / %s', stored_uplink_radio, stored_uplink_ssid, stored_uplink_encryption)
+		local bssid = stored_uplink_bssid or translate('any BSSID')
+		return string.format('%s / %s / %s / %s', stored_uplink_radio, stored_uplink_ssid, bssid, stored_uplink_encryption)
 	end
 	return translate('not configured')
 end
@@ -433,6 +500,11 @@ function f:write()
 		uci:section('pump', 'settings', 'settings', {})
 	end
 
+	local old_uplink_enabled = uci:get_bool('pump', 'settings', 'uplink_enabled')
+	local old_uplink_radio = pump.non_empty(uci:get('pump', 'settings', 'uplink_radio'))
+	local old_uplink_ssid = pump.non_empty(uci:get('pump', 'settings', 'uplink_ssid'))
+	local old_uplink_bssid = pump.non_empty(uci:get('pump', 'settings', 'uplink_bssid'))
+
 	local new_pump_enabled = enabled.data and pump.config_is_valid()
 	local new_mode = mode.data == 'sta' and 'sta' or 'ap'
 	local new_radio = radio.data or 'all'
@@ -441,17 +513,36 @@ function f:write()
 	uci:set('pump', 'settings', 'mode', new_mode)
 	uci:set('pump', 'settings', 'radio', new_radio)
 
-	local selected_uplink = scan_entries[uplink_network.data or '']
+	local selected_uplink_value = uplink_network.data or ''
+	local selected_uplink = scan_entries[selected_uplink_value]
 	local new_uplink_enabled = uplink_enabled.data and selected_uplink ~= nil and pump.non_empty(selected_uplink.ssid) ~= nil and pump.non_empty(selected_uplink.radio) ~= nil
+	local new_uplink_bssid = nil
 
 	uci:set('pump', 'settings', 'uplink_enabled', new_uplink_enabled and '1' or '0')
 	uci:set('pump', 'settings', 'uplink_key', uplink_key.data or '')
+	uci:set('pump', 'settings', 'uplink_htmode', uplink_htmode.data or 'auto')
+	uci:set('pump', 'settings', 'uplink_powersave', uplink_powersave.data and '1' or '0')
 
 	if new_uplink_enabled then
+		local submitted_bssid = pump.non_empty(uplink_bssid.data)
+		local network_changed = selected_uplink_value ~= (stored_uplink_value or '')
+
+		-- Keep the BSSID field as a server-side prefill value. When the user
+		-- changes the dropdown, the newly selected AP's BSSID wins on this save;
+		-- on later saves the editable BSSID field wins. This avoids the old/new
+		-- BSSID oscillation caused by comparing against the previously rendered
+		-- form value.
+		if network_changed then
+			new_uplink_bssid = selected_uplink.bssid
+		else
+			new_uplink_bssid = submitted_bssid or selected_uplink.bssid
+		end
+
 		uci:set('pump', 'settings', 'uplink_radio', selected_uplink.radio)
 		uci:set('pump', 'settings', 'uplink_ssid', selected_uplink.ssid)
-		uci:set('pump', 'settings', 'uplink_bssid', selected_uplink.bssid)
-		uci:set('pump', 'settings', 'uplink_encryption', selected_uplink.encryption)
+		uci:set('pump', 'settings', 'uplink_bssid', new_uplink_bssid or '')
+		uci:set('pump', 'settings', 'uplink_bssid_lock', uplink_bssid_lock.data and '1' or '0')
+		uci:set('pump', 'settings', 'uplink_encryption', pump.normalize_encryption(selected_uplink.encryption))
 	else
 		uci:set('pump', 'settings', 'uplink_enabled', '0')
 	end
@@ -479,9 +570,17 @@ function f:write()
 		uci:commit('wireless')
 	end
 
+	local uplink_changed = old_uplink_enabled ~= new_uplink_enabled
+		or old_uplink_radio ~= (new_uplink_enabled and selected_uplink.radio or nil)
+		or old_uplink_ssid ~= (new_uplink_enabled and selected_uplink.ssid or nil)
+		or old_uplink_bssid ~= (new_uplink_enabled and new_uplink_bssid or nil)
+
+	-- Materialize derived UCI sections (wireless/network/tunneldigger) so the
+	-- saved configuration is complete. Do not reload WiFi/network and do not
+	-- start or restart Tunneldigger from Config Mode: pumpwan does not need to
+	-- exist here, and normal boot/hotplug processing applies the runtime state.
 	os.execute('/lib/gluon/upgrade/335-gluon-pump')
-	uci:commit('network')
-	uci:commit('wireless')
+	commit_upgrade_state()
 end
 
 return f
