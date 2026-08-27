@@ -17,7 +17,7 @@ Usage:
   gluon-pump validate
   gluon-pump pump [--enable|--disable] [--mode ap|sta]
              [--radio all|radioN] [--channel radioN=value]
-             [--htmode radioN=value] [--mesh-no-rebroadcast 0|1] [--apply]
+             [--htmode radioN=value] [--apply]
   gluon-pump uplink --enable --radio radioN --ssid SSID
              --encryption none|psk|psk2|sae|sae-mixed
              [--key KEY|--key-file FILE|-] [--bssid MAC] [--bssid-lock 0|1]
@@ -162,15 +162,11 @@ elseif command == 'validate' then
 elseif command == 'pump' then
 	local options = parse_options(2, {
 		mode = 'value', radio = 'value', channel = 'multi', htmode = 'multi',
-		['mesh-no-rebroadcast'] = 'bool',
 	})
 	local changes = {}
 	if options.enabled ~= nil then changes.enabled = options.enabled end
 	if options.mode ~= nil then changes.mode = options.mode end
 	if options.radio ~= nil then changes.radio = options.radio end
-	if options['mesh-no-rebroadcast'] ~= nil then
-		changes.mesh_no_rebroadcast = options['mesh-no-rebroadcast']
-	end
 	for _, assignment in ipairs(options.channel or {}) do
 		local radio, value = assignment:match('^(radio%d+)=(.+)$')
 		if not radio then fail('--channel expects radioN=value', 2) end

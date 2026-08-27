@@ -11,14 +11,12 @@ local function ensure_settings()
 			enabled = false,
 			mode = 'ap',
 			radio = 'all',
-			mesh_no_rebroadcast = false,
 			preserve_channels = false,
 			uplink_enabled = false,
 			uplink_bssid_lock = true,
 			uplink_encryption = 'auto',
 			uplink_htmode = 'auto',
 			uplink_powersave = false,
-			firewall_wan_zone = false,
 		})
 	end
 end
@@ -28,15 +26,6 @@ local function ensure_gluon_wireless()
 		uci:section('gluon', 'wireless', 'wireless', {})
 	end
 end
-
-local function ensure_network_wan()
-	if not uci:get('network', 'wan') then
-		uci:section('network', 'interface', 'wan', {
-			proto = 'dhcp',
-		})
-	end
-end
-
 
 local function option_as_list(value)
 	if type(value) == 'table' then
@@ -134,14 +123,17 @@ local function ensure_wifi_uplink_network()
 end
 
 
-local function saved_firewall_zone_option(section_name)
-	return 'firewall_' .. section_name:gsub('[^%w_]', '_') .. '_networks'
+local function clear_legacy_firewall_snapshots()
+	local settings = uci:get_all('pump', 'settings') or {}
+	for option, _ in pairs(settings) do
+		if option:match('^firewall_.*_networks$') then
+			uci:delete('pump', 'settings', option)
+		end
+	end
+	uci:delete('pump', 'settings', 'firewall_wan_zone')
 end
 
 function ensure_firewall_wan_zone()
-	local changed = false
-	local found = false
-
 	pcall(function()
 		uci:foreach('firewall', 'zone', function(zone)
 			local section_name = zone['.name']
@@ -149,35 +141,17 @@ function ensure_firewall_wan_zone()
 				return
 			end
 
-			found = true
-			local saved_option = saved_firewall_zone_option(section_name)
-			if uci:get('pump', 'settings', saved_option) == nil then
-				local current = uci:get('firewall', section_name, 'network')
-				if type(current) == 'table' then
-					uci:set_list('pump', 'settings', saved_option, current)
-				elseif current == nil then
-					uci:set('pump', 'settings', saved_option, 'absent')
-				else
-					uci:set('pump', 'settings', saved_option, tostring(current))
-				end
-			end
-
+			-- Gluon v2025.1 owns the base network list and recreates it in
+			-- 300-firewall-rules. PUMP therefore only adds its two interfaces and
+			-- never snapshots or restores the complete list.
 			add_list_unique('firewall', section_name, 'network', pump.uplink_network_name())
 			add_list_unique('firewall', section_name, 'network', pump.uplink_network6_name())
-			changed = true
 		end)
 	end)
-
-	if found and changed then
-		uci:set('pump', 'settings', 'firewall_wan_zone', '1')
-	end
+	clear_legacy_firewall_snapshots()
 end
 
 function restore_firewall_wan_zone_if_owned()
-	if not uci:get_bool('pump', 'settings', 'firewall_wan_zone') then
-		return
-	end
-
 	pcall(function()
 		uci:foreach('firewall', 'zone', function(zone)
 			local section_name = zone['.name']
@@ -185,25 +159,11 @@ function restore_firewall_wan_zone_if_owned()
 				return
 			end
 
-			local saved_option = saved_firewall_zone_option(section_name)
-			local saved = uci:get('pump', 'settings', saved_option)
-			if saved ~= nil then
-				if saved == 'absent' then
-					uci:delete('firewall', section_name, 'network')
-				elseif type(saved) == 'table' then
-					uci:set_list('firewall', section_name, 'network', saved)
-				else
-					uci:set('firewall', section_name, 'network', saved)
-				end
-				uci:delete('pump', 'settings', saved_option)
-			else
-				remove_list_value('firewall', section_name, 'network', pump.uplink_network_name())
-				remove_list_value('firewall', section_name, 'network', pump.uplink_network6_name())
-			end
+			remove_list_value('firewall', section_name, 'network', pump.uplink_network_name())
+			remove_list_value('firewall', section_name, 'network', pump.uplink_network6_name())
 		end)
 	end)
-
-	uci:delete('pump', 'settings', 'firewall_wan_zone')
+	clear_legacy_firewall_snapshots()
 end
 
 local function remove_wifi_uplink_network_if_owned()
@@ -343,17 +303,87 @@ local function ensure_preserve_channels()
 	uci:set('pump', 'settings', 'preserve_channels', own_preserve_channels and '1' or '0')
 end
 
-local function restore_site_wireless_if_owned()
+local function release_preserve_channels_if_owned()
 	if not own_preserve_channels then
-		return
+		return false
 	end
 
 	uci:delete('gluon', 'wireless', 'preserve_channels')
 	uci:set('pump', 'settings', 'preserve_channels', '0')
 	own_preserve_channels = false
-	uci:save('gluon')
-	uci:save('pump')
-	os.execute('/lib/gluon/upgrade/200-wireless')
+	return true
+end
+
+local function saved_radio_option(radio_name, setting)
+	return 'saved_' .. radio_name:gsub('[^%w_]', '_') .. '_' .. setting
+end
+
+local function remember_radio_settings(radio_name)
+	local owned = saved_radio_option(radio_name, 'owned')
+	if uci:get_bool('pump', 'settings', owned) then
+		return
+	end
+
+	for _, setting in ipairs({'channel', 'htmode'}) do
+		local value = uci:get('wireless', radio_name, setting)
+		uci:set('pump', 'settings', saved_radio_option(radio_name, setting),
+			value == nil and 'absent' or tostring(value))
+	end
+	uci:set('pump', 'settings', owned, '1')
+end
+
+local function restore_radio_settings(radio_name)
+	local owned = saved_radio_option(radio_name, 'owned')
+	if not uci:get_bool('pump', 'settings', owned) then
+		return false
+	end
+
+	for _, setting in ipairs({'channel', 'htmode'}) do
+		local option = saved_radio_option(radio_name, setting)
+		local value = uci:get('pump', 'settings', option)
+		if value == 'absent' or value == nil then
+			uci:delete('wireless', radio_name, setting)
+		else
+			uci:set('wireless', radio_name, setting, value)
+		end
+		uci:delete('pump', 'settings', option)
+	end
+	uci:delete('pump', 'settings', owned)
+	return true
+end
+
+local function band_roles_option(band, suffix)
+	return 'band_' .. band:gsub('[^%w_]', '_') .. '_' .. suffix
+end
+
+local function set_band_roles_exclusive(band, exclusive)
+	local section = 'band_' .. band
+	if not uci:get('gluon', section) then
+		return false
+	end
+
+	local owned = band_roles_option(band, 'roles_owned')
+	local saved = band_roles_option(band, 'saved_roles')
+	local is_owned = uci:get_bool('pump', 'settings', owned)
+	local current = uci:get_list('gluon', section, 'role')
+
+	if exclusive then
+		if not is_owned or #current > 0 then
+			uci:set_list('pump', 'settings', saved, current)
+		end
+		uci:set('pump', 'settings', owned, '1')
+		uci:set_list('gluon', section, 'role', {})
+		return false
+	end
+
+	if not is_owned then
+		return false
+	end
+
+	uci:set_list('gluon', section, 'role', uci:get_list('pump', 'settings', saved))
+	uci:delete('pump', 'settings', saved)
+	uci:delete('pump', 'settings', owned)
+	return true
 end
 
 local function saved_disabled_option(iface_name)
@@ -420,6 +450,15 @@ local function set_radio_exclusive(radio_name, keep_iface_name)
 	end)
 end
 
+local function clear_all_saved_iface_states()
+	local settings = uci:get_all('pump', 'settings') or {}
+	for option, _ in pairs(settings) do
+		if option:match('^iface_.*_disabled$') then
+			uci:delete('pump', 'settings', option)
+		end
+	end
+end
+
 local function restore_all_saved_ifaces()
 	uci:foreach('wireless', 'wifi-iface', function(iface)
 		local iface_name = iface['.name']
@@ -427,12 +466,17 @@ local function restore_all_saved_ifaces()
 			restore_iface_disabled_state(iface_name)
 		end
 	end)
+
+	-- Gluon v2025.1 recreates wifi-iface sections from band roles. Drop saved
+	-- state for sections that no longer exist after such a regeneration.
+	clear_all_saved_iface_states()
 end
 
 local function apply_radio_settings(radio)
 	local radio_name = radio['.name']
 	local mode = selected_mode()
 
+	remember_radio_settings(radio_name)
 	ensure_preserve_channels()
 
 	if mode == 'sta' then
@@ -455,6 +499,7 @@ local function apply_uplink_radio_settings(radio)
 	local radio_name = radio['.name']
 	local htmode = pump.non_empty(uci:get('pump', 'settings', 'uplink_htmode')) or 'auto'
 
+	remember_radio_settings(radio_name)
 	ensure_preserve_channels()
 	uci:set('wireless', radio_name, 'channel', 'auto')
 
@@ -464,18 +509,16 @@ local function apply_uplink_radio_settings(radio)
 	uci:set('wireless', radio_name, 'htmode', htmode)
 end
 
-local function configure_network(name, enabled)
+local function configure_network(name, enabled, radio)
+	local hop_penalty = uci:get('gluon', 'band_' .. radio.band, 'batadv_hop_penalty') or '0'
 	uci:section('network', 'interface', name, {
 		proto = 'gluon_mesh',
-		transitive = '1',
 		fixed_mtu = '1',
+		hop_penalty = hop_penalty,
 	})
-
-	if uci:get_bool('pump', 'settings', 'mesh_no_rebroadcast') then
-		uci:set('network', name, 'mesh_no_rebroadcast', '1')
-	else
-		uci:delete('network', name, 'mesh_no_rebroadcast')
-	end
+	-- Removed from Gluon's v2025.1 gluon_mesh protocol; clean legacy state.
+	uci:delete('network', name, 'transitive')
+	uci:delete('network', name, 'mesh_no_rebroadcast')
 
 	if enabled then
 		uci:delete('network', name, 'auto')
@@ -489,7 +532,7 @@ local function configure_pump_wireless(radio, index, enabled)
 	local name = pump.iface_name(radio_name)
 	local mode = selected_mode()
 
-	configure_network(name, enabled)
+	configure_network(name, enabled, radio)
 
 	if not enabled then
 		set_non_pump_ifaces_disabled(radio_name, false)
@@ -507,7 +550,10 @@ local function configure_pump_wireless(radio, index, enabled)
 
 	apply_radio_settings(radio)
 
-	local macaddr = wireless.get_wlan_mac(uci, radio, index, 3)
+	-- Gluon v2025.1 uses a named MAC role and a zero-based radio index. PUMP
+	-- deliberately reuses the OWE slot because the selected radio is exclusive;
+	-- the regular OWE VIF is disabled whenever this PUMP VIF is active.
+	local macaddr = wireless.get_wlan_mac('owe', index, radio)
 	if not macaddr then
 		uci:set('wireless', name, 'disabled', true)
 		return
@@ -610,16 +656,73 @@ end
 
 ensure_settings()
 
--- Clear stale exclusive-radio disables first. Active exclusive modes will
--- immediately save and apply their current disable set again below.
-restore_all_saved_ifaces()
-
 local pump_enabled = uci:get_bool('pump', 'settings', 'enabled') and pump.config_is_valid()
 local uplink_enabled = uci:get_bool('pump', 'settings', 'uplink_enabled') and pump.uplink_config_is_valid()
 local uplink_radio = pump.non_empty(uci:get('pump', 'settings', 'uplink_radio'))
 
+-- Gluon v2025.1 expresses normal wireless services as per-band roles. If PUMP
+-- owns every radio of a band exclusively, temporarily clear that band's roles
+-- as well as disabling the already materialized VIFs. On multi-radio bands with
+-- at least one unclaimed radio, keep the band roles and only disable the VIFs on
+-- the selected radio.
+local band_totals = {}
+local band_exclusive = {}
+local radio_exclusive = {}
+
+wireless.foreach_radio(uci, function(radio)
+	local radio_name = radio['.name']
+	local band = radio.band
+	local is_uplink = uplink_enabled and uplink_radio == radio_name
+	local is_pump = pump_enabled and selected_radio_matches(radio_name) and not is_uplink
+
+	band_totals[band] = (band_totals[band] or 0) + 1
+	if is_uplink or is_pump then
+		radio_exclusive[radio_name] = true
+		band_exclusive[band] = (band_exclusive[band] or 0) + 1
+	end
+end)
+
+local rebuild_standard_wireless = false
+for _, band in ipairs({'2g', '5g'}) do
+	local all_exclusive = (band_totals[band] or 0) > 0
+		and band_exclusive[band] == band_totals[band]
+	if set_band_roles_exclusive(band, all_exclusive) then
+		rebuild_standard_wireless = true
+	end
+end
+
+wireless.foreach_radio(uci, function(radio)
+	local radio_name = radio['.name']
+	if not radio_exclusive[radio_name] then
+		restore_radio_settings(radio_name)
+	end
+end)
+
+if not pump_enabled and not uplink_enabled and release_preserve_channels_if_owned() then
+	rebuild_standard_wireless = true
+end
+
+if rebuild_standard_wireless then
+	-- 200-wireless always recreates wifi-iface sections in Gluon v2025.1.
+	-- Persist our role/channel changes first, then discard this cursor so it
+	-- cannot overwrite the freshly generated state with stale data.
+	uci:save('pump')
+	uci:save('gluon')
+	uci:save('wireless')
+	local status = os.execute('/lib/gluon/upgrade/200-wireless')
+	if status ~= true and status ~= 0 then
+		io.stderr:write('gluon-pump: /lib/gluon/upgrade/200-wireless failed\n')
+		os.exit(1)
+	end
+	uci = require('simple-uci').cursor()
+	clear_all_saved_iface_states()
+else
+	-- Clear stale exclusive-radio disables first. Active exclusive modes will
+	-- immediately save and apply their current disable set again below.
+	restore_all_saved_ifaces()
+end
+
 if not pump_enabled and not uplink_enabled then
-	restore_site_wireless_if_owned()
 	remove_wifi_uplink_network_if_owned()
 end
 
@@ -639,6 +742,9 @@ wireless.foreach_radio(uci, function(radio, index)
 end)
 
 configure_wifi_uplink(uplink_radio_config, uplink_radio_index, uplink_enabled)
+
+-- Obsolete since Gluon v2025.1 removed these gluon_mesh protocol options.
+uci:delete('pump', 'settings', 'mesh_no_rebroadcast')
 
 uci:save('pump')
 uci:save('gluon')

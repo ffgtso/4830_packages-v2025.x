@@ -47,14 +47,12 @@ local function ensure_settings(uci)
 		enabled = false,
 		mode = 'ap',
 		radio = 'all',
-		mesh_no_rebroadcast = false,
 		preserve_channels = false,
 		uplink_enabled = false,
 		uplink_bssid_lock = true,
 		uplink_encryption = 'auto',
 		uplink_htmode = 'auto',
 		uplink_powersave = false,
-		firewall_wan_zone = false,
 	})
 end
 
@@ -363,22 +361,11 @@ function M.runtime_apply()
 	io.stderr:write('Applying PUMP runtime state; wireless connectivity may be interrupted.\n')
 	io.stderr:flush()
 
-	local commands = {
-		'/etc/init.d/network reload',
-		'/etc/init.d/firewall reload',
-		'wifi reload',
-	}
-	for _, command in ipairs(commands) do
-		if not shell_ok(command) then
-			return nil, 'runtime command failed: ' .. command
-		end
-	end
-
-	shell_ok('/lib/gluon/wan-dnsmasq/update.lua >/dev/null 2>&1')
-	if bool(require('simple-uci').cursor():get('pump', 'settings', 'uplink_enabled')) then
-		shell_ok('/usr/lib/gluon/pump/tunneldigger-bind restart >/dev/null 2>&1')
-	elseif shell_ok('[ -x /etc/init.d/tunneldigger ]') then
-		shell_ok('/etc/init.d/tunneldigger restart >/dev/null 2>&1')
+	-- Gluon v2025.1 provides an ordered reload path that stops services,
+	-- re-runs all upgrade scripts (including 335-gluon-pump), and starts the
+	-- network/firewall/DNS services in their supported order.
+	if not shell_ok('/usr/bin/gluon-reload') then
+		return nil, 'runtime command failed: /usr/bin/gluon-reload'
 	end
 
 	return true

@@ -2,7 +2,6 @@ config settings 'settings'
 	option enabled '0'
 	option mode 'ap'
 	option radio 'all'
-	option mesh_no_rebroadcast '0'
 	# Internal ownership flag: set to 1 only when PUMP enabled
 	# gluon.wireless.preserve_channels itself.
 	option preserve_channels '0'
@@ -30,4 +29,3 @@ config settings 'settings'
 	# PUMP STA or WiFi uplink radio disables other wifi-ifaces on the selected
 	# radio and are removed again on restore.
 	option tunneldigger_bind_interface '0' # intern: Ownership für Tunneldigger bind_interface
-	option firewall_wan_zone '0' # intern: Ownership für firewall zone network additions

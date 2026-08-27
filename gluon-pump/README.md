@@ -87,10 +87,13 @@ festgelegt werden. Nicht ausgewählte Radios zeigen im Config-Mode keine
 PUMP-Kanal-/HT-Felder und werden vom PUMP-Upgrade-Script nicht verändert.
 
 Ein ausgewähltes PUMP-Radio wird auch im AP-Modus exklusiv verwendet: PUMP
-deaktiviert die regulären Gluon-Client-, OWE- und Mesh-VIFs auf demselben Radio
-und merkt sich deren vorherigen `disabled`-Status. Dadurch zeigt auch Gluons
-WLAN-Menü das Radio nicht parallel als normales Mesh-/AP-Radio an. Beim Wechsel
-des Radios oder beim Deaktivieren von PUMP werden die Zustände wiederhergestellt.
+deaktiviert die regulären Gluon-Client-, OWE-, Private-WiFi- und Mesh-VIFs auf
+demselben Radio und merkt sich deren vorherigen `disabled`-Status. Seit Gluon
+v2025.1 werden diese Dienste zusätzlich über `gluon.band_2g.role` und
+`gluon.band_5g.role` gesteuert. Gehören alle Radios eines Bands exklusiv PUMP,
+sichert PUMP deshalb auch die Rollen dieses Bands und leert sie vorübergehend.
+Beim Wechsel des Radios oder beim Deaktivieren von PUMP werden Rollen,
+VIF-Zustände sowie Kanal und HT-Modus wiederhergestellt.
 
 Sobald PUMP Kanal oder HT-Modus verwaltet, setzt das Paket:
 
@@ -126,7 +129,10 @@ PHY den Kanal festnageln. Deshalb verwendet PUMP das ausgewählte Radio in AP-
 und STA-Modus exklusiv und deaktiviert alle anderen `wifi-iface`-Sections auf
 diesem Radio temporär. Der vorherige `disabled`-Status wird in internen
 `pump.settings.iface_*_disabled`-Optionen gespeichert. Beim Wechsel des Radios
-oder beim Deaktivieren von PUMP werden diese Zustände wiederhergestellt.
+oder beim Deaktivieren von PUMP werden diese Zustände wiederhergestellt. Bei
+mehreren Radios desselben Bands werden die bandweiten Gluon-Rollen nur dann
+geleert, wenn wirklich alle Radios dieses Bands exklusiv belegt sind; ansonsten
+bleiben die Rollen für die nicht ausgewählten Radios aktiv.
 
 
 ## WiFi-Uplink
@@ -184,9 +190,12 @@ verwenden.
 
 Der WiFi-Uplink verwendet das gewählte Radio exklusiv. Während er aktiv ist,
 werden alle anderen `wifi-iface`-Sections auf diesem Radio deaktiviert, auch
-Client-AP, 802.11s-Mesh oder ein PUMP-Interface. Die vorherigen `disabled`-
-Zustände werden unter internen `pump.settings.iface_*_disabled`-Optionen
-gesichert und beim Deaktivieren oder Radio-Wechsel wiederhergestellt.
+Client-AP, 802.11s-Mesh, Private-WiFi oder ein PUMP-Interface. Die vorherigen
+`disabled`-Zustände werden unter internen
+`pump.settings.iface_*_disabled`-Optionen gesichert und beim Deaktivieren oder
+Radio-Wechsel wiederhergestellt. Belegt der Uplink alle Radios seines Bands,
+werden außerdem die bandweiten Gluon-v2025.1-Rollen gesichert und temporär
+geleert.
 
 Für den WiFi-Uplink wird kein Kanal festgelegt. Das Radio wird auf
 `channel auto` gesetzt, damit der STA-Modus dem ausgewählten AP folgen kann.
@@ -378,10 +387,13 @@ gluon-pump apply
 ```
 
 Alternativ kann `--apply` direkt an `pump` oder `uplink` angehängt werden.
-`apply` lädt Netzwerk, Firewall und WLAN neu und kann deshalb die aktuelle
-SSH-Verbindung unterbrechen, insbesondere wenn deren Funkinterface durch die
-exklusive PUMP-Nutzung deaktiviert wird. Bei Fernwartung sollte der getrennte
-Apply-Schritt oder ein geplanter Reboot verwendet werden.
+`apply` verwendet unter Gluon v2025.1 den geordneten Gluon-Pfad
+`/usr/bin/gluon-reload`. Dieser materialisiert die komplette Konfiguration neu
+und startet Netzwerk, Firewall und DNS-Dienste in der von Gluon vorgesehenen
+Reihenfolge. Dabei kann die aktuelle SSH-Verbindung unterbrochen werden,
+insbesondere wenn deren Funkinterface durch die exklusive PUMP-Nutzung
+deaktiviert wird. Bei Fernwartung sollte der getrennte Apply-Schritt oder ein
+geplanter Reboot verwendet werden.
 
 Alle Befehle und Optionen zeigt:
 
@@ -398,7 +410,6 @@ config settings 'settings'
 	option enabled '0'
 	option mode 'ap'
 	option radio 'all'
-	option mesh_no_rebroadcast '0'
 	option preserve_channels '0' # intern: Ownership für preserve_channels
 	option uplink_enabled '0'
 	option uplink_radio ''
@@ -431,7 +442,7 @@ uci commit pump
 uci commit gluon
 uci commit network
 uci commit wireless
-wifi reload
+gluon-pump apply
 ```
 
 Das Upgrade-Script setzt daraus zusätzlich:
@@ -454,7 +465,7 @@ uci commit pump
 uci commit gluon
 uci commit network
 uci commit wireless
-wifi reload
+gluon-pump apply
 ```
 
 Das Upgrade-Script setzt daraus:
@@ -474,8 +485,8 @@ Das Upgrade-Script erzeugt pro ausgewähltem Radio außerdem:
 ```uci
 config interface 'pump_radio1'
 	option proto 'gluon_mesh'
-	option transitive '1'
 	option fixed_mtu '1'
+	option hop_penalty '0' # bzw. gluon.band_5g.batadv_hop_penalty
 
 config wifi-iface 'pump_radio1'
 	option device 'radio1'
@@ -505,8 +516,7 @@ uci commit pump
 uci commit gluon
 uci commit network
 uci commit wireless
-/etc/init.d/network reload
-wifi reload
+gluon-pump apply
 ```
 
 Das Upgrade-Script bindet den WiFi-Uplink nicht direkt an `network.wan`, weil
@@ -548,10 +558,12 @@ GLUON_SITE_PACKAGES += gluon-pump
 
 ## Voraussetzungen und Grenzen
 
-* Erfordert Gluon ab `v2023.1.x`.
+* Dieser Stand ist für Gluon `v2025.1.x` und OpenWrt 24.10 ausgelegt.
 * Erfordert batman-adv, also typischerweise `mesh-batman-adv-15`.
 * Erfordert WPA3-AP-Support über `gluon-wireless-encryption-wpa3`.
-* Erfordert für PUMP-STA und WiFi-Uplink zusätzlich `wpa-supplicant-wolfssl`, da `hostapd-wolfssl` nur den Authenticator/AP-Teil bereitstellt.
+* Erfordert für PUMP-STA und WiFi-Uplink zusätzlich
+  `wpa-supplicant-mbedtls`. Damit verwendet PUMP dasselbe TLS-Backend wie
+  Gluon v2025.1 (`hostapd-mbedtls`).
 * Erfordert `libiwinfo-lua` für Kanal- und HT-Modus-Listen im Config-Mode.
 * Erfordert `gluon-wan-dnsmasq`; per DHCPv4, DHCPv6 und RA gelernte
   Uplink-DNS-Server bleiben dadurch vom primären Gluon-Resolver getrennt.
@@ -563,9 +575,10 @@ GLUON_SITE_PACKAGES += gluon-pump
   Die PUMP-Strecke muss wie ein geplanter Link behandelt werden: Kanal,
   Bandbreite, Sendeleistung, Antennen, DFS/Outdoor-Regeln und Airtime sollten
   bewusst geplant werden.
-* `mesh_no_rebroadcast` ist vorhanden, aber standardmäßig deaktiviert. Für
-  echte Punkt-zu-Punkt-Strecken kann es sinnvoll sein; bei Punkt-zu-Mehrpunkt
-  sollte es nur nach Test aktiviert werden.
+* Die bis fix22 geschriebenen Optionen `transitive` und
+  `mesh_no_rebroadcast` werden entfernt, weil das `gluon_mesh`-Protokoll sie in
+  Gluon v2025.1 nicht mehr auswertet. Stattdessen übernimmt jedes PUMP-Hardif
+  die bandbezogene `batadv_hop_penalty`-Einstellung von Gluon.
 
 ## Betriebshinweise
 
@@ -636,7 +649,12 @@ PUMP upgrade run.
 
 ### Notes for 0.1.19
 
-* `pump_wan` and `pump_wan6` are added to the existing firewall zone named `wan` while WiFi-Uplink is active. This makes the WiFi uplink follow the same WAN-side access rules as the normal `br-wan` uplink, for example SSH access to the node where the site firewall permits it. The previous firewall zone network list is saved in `/etc/config/pump` and restored when WiFi-Uplink is disabled.
+* `pump_wan` and `pump_wan6` are added to the existing firewall zone named
+  `wan` while WiFi-Uplink is active. This makes the WiFi uplink follow the same
+  WAN-side access rules as the normal `br-wan` uplink, for example SSH access
+  to the node where the site firewall permits it. Since Gluon v2025.1 owns and
+  rebuilds the base zone list, PUMP now removes only its own two entries when
+  the uplink is disabled; old full-list snapshots are migrated away.
 * 0.1.19 used `peerdns=1` and wrote DNS learned by `pump_wan` directly to
   `/var/gluon/wan-dnsmasq/resolv.conf`. This implementation is superseded by
   the Gluon-native integration in 0.1.21.
@@ -664,3 +682,23 @@ PUMP upgrade run.
 * The package no longer writes or clears
   `/var/gluon/wan-dnsmasq/resolv.conf` itself. Static DNS and DNS learned on
   other WAN uplinks are therefore preserved.
+
+
+### Notes for 0.1.23 / Gluon v2025.1
+
+* Uses the Gluon-v2025.1 `wireless.get_wlan_mac(role, index, radio)` API and
+  its zero-based radio indices. The former 2023.1 call signature no longer
+  materializes a valid PUMP VIF on v2025.1.
+* Integrates with the new per-band WLAN roles in `gluon.band_2g.role` and
+  `gluon.band_5g.role`. Roles are only claimed when every radio of that band is
+  exclusively used by PUMP or the WiFi uplink; multi-radio bands retain normal
+  services on unclaimed radios.
+* Saves and restores each claimed radio's channel and HT mode when PUMP moves
+  to another radio while `gluon.wireless.preserve_channels` remains active.
+* Replaces obsolete `transitive`/`mesh_no_rebroadcast` options with the
+  v2025.1 `hop_penalty` option inherited from the radio band.
+* Uses `wpa-supplicant-mbedtls`, matching Gluon v2025.1's
+  `hostapd-mbedtls`, and marks `/etc/config/pump` as a conffile.
+* Relies on Gluon v2025.1's native `wan-dnsmasq/interface.d` hotplug support;
+  the duplicate PUMP DNS hotplug hook has been removed.
+* The CLI's runtime apply path now uses `/usr/bin/gluon-reload`.
