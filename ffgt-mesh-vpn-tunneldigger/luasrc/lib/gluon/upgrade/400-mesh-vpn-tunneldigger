@@ -7,10 +7,17 @@ local vpn_core = require 'gluon.mesh-vpn'
 local uci = require('simple-uci').cursor()
 
 
+-- Follow the uplink selection made by gluon-web-cellular. Recompute this
+-- on every reconfigure so disabling cellular restores the wired WAN binding.
+local bind_interface = 'br-wan'
+if uci:get_bool('gluon', 'cellular', 'enabled') then
+	bind_interface = 'wwan0'
+end
+
 uci:section('tunneldigger', 'broker', 'mesh_vpn', {
 	uuid = util.node_id(),
 	interface = vpn_core.get_interface(),
-	bind_interface = 'br-wan',
+	bind_interface = bind_interface,
 	group = 'gluon-mesh-vpn',
 	broker_selection = 'usage',
 	address = site.mesh_vpn.tunneldigger.brokers(),
