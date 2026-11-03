@@ -1,8 +1,7 @@
-Validation: 2026-11-02
-Target: Gluon v2025.1
-Lua 5.1: 67 tests passed (mocked router APIs).
-Python shell wrapper: 1 test passed.
-All Lua source files: luac -p passed.
-Shell entry and hooks: sh -n passed.
-Compatibility patch: git apply --check and byte comparison against delivered package passed.
-No firmware build, native router integration test or hardware tests performed.
+Validation: 2026-11-03
+Target: Gluon v2025.1.3 / manager 1-r4 / gluon-pump 0.1.22-r2
+Lua 5.1: 83 tests passed (mocked router APIs).
+Python: 2 tests passed (wrapper and compiled respondd with UCI/JSON doubles).
+Lua and shell syntax: passed.
+Both patches: apply check and exact package file/mode comparison passed.
+No firmware build, target ABI/integration test or hardware test.

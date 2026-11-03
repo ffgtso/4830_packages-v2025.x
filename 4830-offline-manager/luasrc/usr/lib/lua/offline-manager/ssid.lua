@@ -20,7 +20,9 @@ function M.rewrite(text, mapping)
 		if entry then
 			if line:match('^ssid=') or line:match('^ssid2=') then
 				line = 'ssid2=' .. hex(entry.ssid)
-
+			elseif line:match('^config_id=') then
+				-- OpenWrt uses this ID to invalidate stations on BSS changes.
+				line = 'config_id=offline-manager-' .. hex(entry.ssid)
 			end
 		end
 		return line .. newline
